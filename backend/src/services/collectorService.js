@@ -59,7 +59,10 @@ async function upsertHost(client, hostInfo, sourceIp) {
   const controlFileNameId = await getOrCreateNameId(client, hostInfo.controlfile);
   const now = Math.floor(Date.now() / 1000);
   
-  // Check if host exists
+  // Clean IPv6-mapped IPv4 address (::ffff:10.5.10.4 -> 10.5.10.4)
+  const cleanSourceIp = sourceIp.replace('::ffff:', '');
+  
+  // Check if host exists by monitid (like M/Monit does)
   const checkResult = await client.query(
     'SELECT id, incarnation FROM host WHERE monitid = $1',
     [hostInfo.monitId]
@@ -70,36 +73,44 @@ async function upsertHost(client, hostInfo, sourceIp) {
   if (checkResult.rows.length > 0) {
     // Update existing host
     hostId = checkResult.rows[0].id;
+    const oldIncarnation = checkResult.rows[0].incarnation;
+    const isReincarnation = oldIncarnation !== hostInfo.incarnation;
     
     await client.query(`
       UPDATE host SET
         updated_at = $1,
-        status = $2,
-        nameid = $3,
+        incarnation = $2,
+        status = $3,
         ipaddrin = $4,
-        portin = $5,
-        sslin = $6,
-        poll = $7,
-        startdelay = $8,
-        controlfilenameid = $9,
-        version = $10,
-        platformname = $11,
-        platformrelease = $12,
-        platformversion = $13,
-        platformmachine = $14,
-        platformcpu = $15,
-        platformmemory = $16,
-        platformswap = $17,
-        platformuptime = $18,
-        statusmodified = $19
-      WHERE id = $20
+        ipaddrout = $5,
+        portin = $6,
+        portout = $7,
+        sslin = $8,
+        sslout = $9,
+        poll = $10,
+        startdelay = $11,
+        controlfilenameid = $12,
+        version = $13,
+        platformname = $14,
+        platformrelease = $15,
+        platformversion = $16,
+        platformmachine = $17,
+        platformcpu = $18,
+        platformmemory = $19,
+        platformswap = $20,
+        platformuptime = $21,
+        statusmodified = $22
+      WHERE id = $23
     `, [
       now,
+      hostInfo.incarnation,
       0, // status OK
-      nameId,
-      sourceIp,
+      hostInfo.httpd.address, // ipaddrin from Monit config
+      cleanSourceIp, // ipaddrout = real IP
       hostInfo.httpd.port,
+      hostInfo.httpd.port, // portout = same as portin
       hostInfo.httpd.ssl ? 1 : 0,
+      hostInfo.httpd.ssl ? 1 : 0, // sslout = same as sslin
       hostInfo.poll,
       hostInfo.startdelay,
       controlFileNameId,
@@ -116,6 +127,10 @@ async function upsertHost(client, hostInfo, sourceIp) {
       hostId
     ]);
     
+    if (isReincarnation) {
+      console.log(`[Collector] Host ${hostInfo.localhostname} reincarnated (incarnation: ${oldIncarnation} -> ${hostInfo.incarnation})`);
+    }
+    
   } else {
     // Insert new host
     hostId = generateId();
@@ -123,22 +138,26 @@ async function upsertHost(client, hostInfo, sourceIp) {
     await client.query(`
       INSERT INTO host (
         id, created_at, updated_at, incarnation, status, nameid,
-        monitid, ipaddrin, portin, sslin, poll, startdelay,
-        controlfilenameid, statusmodified, version,
+        monitid, ipaddrin, ipaddrout, portin, portout, sslin, sslout,
+        poll, startdelay, controlfilenameid, statusmodified, version,
         platformname, platformrelease, platformversion, platformmachine,
         platformcpu, platformmemory, platformswap, platformuptime
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-        $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
       )
     `, [
       hostId, now, now, hostInfo.incarnation, 0, nameId,
-      hostInfo.monitId, sourceIp, hostInfo.httpd.port, hostInfo.httpd.ssl ? 1 : 0,
+      hostInfo.monitId, hostInfo.httpd.address, cleanSourceIp, // ipaddrin from config, ipaddrout=real IP
+      hostInfo.httpd.port, hostInfo.httpd.port, // portin and portout
+      hostInfo.httpd.ssl ? 1 : 0, hostInfo.httpd.ssl ? 1 : 0, // sslin and sslout
       hostInfo.poll, hostInfo.startdelay, controlFileNameId, now,
       hostInfo.version, hostInfo.platform.name, hostInfo.platform.release,
       hostInfo.platform.version, hostInfo.platform.machine, hostInfo.platform.cpu,
       hostInfo.platform.memory, hostInfo.platform.swap, hostInfo.uptime
     ]);
+    
+    console.log(`[Collector] New host registered: ${hostInfo.localhostname} (${cleanSourceIp})`);
   }
   
   return hostId;
