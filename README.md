@@ -28,7 +28,7 @@ Configure your Monit instances to send data:
 
 ```bash
 # In /etc/monit/monitrc
-set mmonit http://your-server:3001/collector
+set mmonit http://YOUR-IP:3001/collector
 ```
 
 # 📋 Project Status
