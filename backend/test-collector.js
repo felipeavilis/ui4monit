@@ -105,7 +105,7 @@ const testXml = `<?xml version="1.0" encoding="UTF-8"?>
 
 const options = {
   hostname: 'localhost',
-  port: 3001,
+  port: 8705,
   path: '/collector',
   method: 'POST',
   headers: {
@@ -128,7 +128,7 @@ const req = http.request(options, (res) => {
   
   res.on('end', () => {
     console.log('Response:', data);
-    console.log('\n✅ Test completed! Check http://localhost:3001/api/hosts');
+    console.log('\n✅ Test completed! Check http://localhost:8705/api/hosts');
   });
 });
 

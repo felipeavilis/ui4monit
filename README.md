@@ -28,7 +28,7 @@ Configure your Monit instances to send data:
 
 ```bash
 # In /etc/monit/monitrc
-set mmonit http://YOUR-IP:3001/collector
+set mmonit http://YOUR-IP:8705/collector
 ```
 
 # 📋 Project Status
@@ -67,7 +67,7 @@ node test-collector.js
 On the server running Monit, edit `/etc/monit/monitrc`:
 
 ```bash
-set mmonit http://YOUR-IP:3001/collector
+set mmonit http://YOUR-IP:8705/collector
 ```
 
 Restart the service:
@@ -80,13 +80,13 @@ monit reload
 
 ```bash
 # Check received hosts
-curl http://localhost:3001/api/hosts
+curl http://localhost:8705/api/hosts
 
 # Check events
-curl http://localhost:3001/api/events
+curl http://localhost:8705/api/events
 
 # Dashboard summary
-curl http://localhost:3001/api/dashboard
+curl http://localhost:8705/api/dashboard
 ```
 
 ## 🗂️ Project Structure

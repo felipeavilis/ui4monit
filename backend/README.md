@@ -92,7 +92,7 @@ docker-compose up -d
 In your Monit instance, add the following to `/etc/monit/monitrc`:
 
 ```
-set mmonit http://YOUR-IP:3001/collector
+set mmonit http://YOUR-IP:8705/collector
 ```
 
 Then restart Monit:

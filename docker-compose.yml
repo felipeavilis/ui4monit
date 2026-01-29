@@ -29,9 +29,9 @@ services:
       DB_USER: ui4monit
       DB_PASSWORD: ui4monit
       DB_NAME: ui4monit
-      PORT: 8001
+      PORT: 8705
     ports:
-      - "8001:8001"
+      - "8705:8705"
     depends_on:
       postgres:
         condition: service_healthy
