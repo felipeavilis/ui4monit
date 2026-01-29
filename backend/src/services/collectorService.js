@@ -85,35 +85,43 @@ async function upsertHost(client, hostInfo, sourceIp) {
         ipaddrout = $5,
         portin = $6,
         portout = $7,
-        sslin = $8,
-        sslout = $9,
-        poll = $10,
-        startdelay = $11,
-        controlfilenameid = $12,
-        version = $13,
-        platformname = $14,
-        platformrelease = $15,
-        platformversion = $16,
-        platformmachine = $17,
-        platformcpu = $18,
-        platformmemory = $19,
-        platformswap = $20,
-        platformuptime = $21,
-        statusmodified = $22
-      WHERE id = $23
+        uname = $8,
+        password = $9,
+        sslin = $10,
+        sslout = $11,
+        description = $12,
+        poll = $13,
+        startdelay = $14,
+        controlfilenameid = $15,
+        statusmodified = $16,
+        version = $17,
+        platformname = $18,
+        platformrelease = $19,
+        platformversion = $20,
+        platformmachine = $21,
+        platformcpu = $22,
+        platformmemory = $23,
+        platformswap = $24,
+        platformuptime = $25,
+        statusheartbeat = $26
+      WHERE id = $27
     `, [
       now,
       hostInfo.incarnation,
-      0, // status OK
+      1, // status = 1 (monitored/active)
       hostInfo.httpd.address, // ipaddrin from Monit config
       cleanSourceIp, // ipaddrout = real IP
       hostInfo.httpd.port,
       hostInfo.httpd.port, // portout = same as portin
+      hostInfo.credentials?.username || '',
+      hostInfo.credentials?.password || '',
       hostInfo.httpd.ssl ? 1 : 0,
-      hostInfo.httpd.ssl ? 1 : 0, // sslout = same as sslin
+      -1, // sslout = -1 (default)
+      '', // description = empty string
       hostInfo.poll,
       hostInfo.startdelay,
       controlFileNameId,
+      now,
       hostInfo.version,
       hostInfo.platform.name,
       hostInfo.platform.release,
@@ -122,8 +130,8 @@ async function upsertHost(client, hostInfo, sourceIp) {
       hostInfo.platform.cpu,
       hostInfo.platform.memory,
       hostInfo.platform.swap,
-      hostInfo.uptime,
-      now,
+      -1, // platformuptime = -1 (not the server uptime)
+      1, // statusheartbeat = 1
       hostId
     ]);
     
@@ -137,24 +145,39 @@ async function upsertHost(client, hostInfo, sourceIp) {
     
     await client.query(`
       INSERT INTO host (
-        id, created_at, updated_at, incarnation, status, nameid,
-        monitid, ipaddrin, ipaddrout, portin, portout, sslin, sslout,
-        poll, startdelay, controlfilenameid, statusmodified, version,
+        id, created_at, updated_at, incarnation, status, nameid, keepname,
+        monitid, ipaddrin, ipaddrout, portin, portout, uname, password,
+        sslin, sslout, description, poll, startdelay, controlfilenameid,
+        statusmodified, servicemodified, serviceskew, serviceup, servicedown,
+        serviceunmonitorauto, serviceunmonitormanual, version,
         platformname, platformrelease, platformversion, platformmachine,
-        platformcpu, platformmemory, platformswap, platformuptime
+        platformcpu, platformmemory, platformswap, platformuptime, statusheartbeat
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+        $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+        $28, $29, $30, $31, $32, $33, $34, $35, $36, $37
       )
     `, [
-      hostId, now, now, hostInfo.incarnation, 0, nameId,
+      hostId, now, now, hostInfo.incarnation, 1, nameId, 0, // status = 1, keepname = 0
       hostInfo.monitId, hostInfo.httpd.address, cleanSourceIp, // ipaddrin from config, ipaddrout=real IP
       hostInfo.httpd.port, hostInfo.httpd.port, // portin and portout
-      hostInfo.httpd.ssl ? 1 : 0, hostInfo.httpd.ssl ? 1 : 0, // sslin and sslout
-      hostInfo.poll, hostInfo.startdelay, controlFileNameId, now,
+      hostInfo.credentials?.username || '',
+      hostInfo.credentials?.password || '',
+      hostInfo.httpd.ssl ? 1 : 0, -1, // sslin, sslout = -1
+      '', // description = empty string
+      hostInfo.poll, hostInfo.startdelay, controlFileNameId,
+      now, // statusmodified
+      0, // servicemodified (will be updated after services)
+      -1, // serviceskew = -1
+      0, // serviceup (will be calculated after services)
+      0, // servicedown (will be calculated after services)
+      0, // serviceunmonitorauto = 0
+      0, // serviceunmonitormanual = 0
       hostInfo.version, hostInfo.platform.name, hostInfo.platform.release,
       hostInfo.platform.version, hostInfo.platform.machine, hostInfo.platform.cpu,
-      hostInfo.platform.memory, hostInfo.platform.swap, hostInfo.uptime
+      hostInfo.platform.memory, hostInfo.platform.swap,
+      -1, // platformuptime = -1
+      1 // statusheartbeat = 1
     ]);
     
     console.log(`[Collector] New host registered: ${hostInfo.localhostname} (${cleanSourceIp})`);
@@ -169,59 +192,178 @@ async function upsertHost(client, hostInfo, sourceIp) {
 async function updateServices(client, hostId, services) {
   const now = Math.floor(Date.now() / 1000);
   
+  // Batch: criar todos os nameIds de uma vez
+  const serviceNames = services.map(s => s.name);
+  const nameIdMap = await getOrCreateNameIdsBatch(client, serviceNames);
+  
+  // Buscar serviços existentes de uma vez
+  const existingServices = await client.query(
+    'SELECT id, nameid FROM service WHERE hostid = $1',
+    [hostId]
+  );
+  
+  const existingMap = new Map(
+    existingServices.rows.map(r => [r.nameid.toString(), r.id])
+  );
+  
+  const toInsert = [];
+  const toUpdate = [];
+  
   for (const service of services) {
-    const serviceNameId = await getOrCreateNameId(client, service.name);
+    const serviceNameId = nameIdMap[service.name];
+    const existingId = existingMap.get(serviceNameId.toString());
     
-    // Check if service exists
-    const checkResult = await client.query(
-      'SELECT id FROM service WHERE hostid = $1 AND nameid = $2',
-      [hostId, serviceNameId]
-    );
-    
-    let serviceId;
-    
-    if (checkResult.rows.length > 0) {
-      // Update existing service
-      serviceId = checkResult.rows[0].id;
-      
-      await client.query(`
-        UPDATE service SET
-          updated_at = $1,
-          type = $2,
-          status = $3,
-          statushint = $4,
-          monitoringstate = $5,
-          monitoringmode = $6,
-          onreboot = $7,
-          statusmodified = $8
-        WHERE id = $9
-      `, [
-        now, service.type, service.status, service.statusHint,
-        service.monitoringState, service.monitoringMode, service.onReboot,
-        now, serviceId
-      ]);
-      
+    if (existingId) {
+      toUpdate.push({ id: existingId, serviceNameId, service });
     } else {
-      // Insert new service
-      serviceId = generateId();
-      
-      await client.query(`
-        INSERT INTO service (
-          id, created_at, updated_at, nameid, hostid, type,
-          status, statushint, monitoringstate, monitoringmode,
-          onreboot, statusmodified
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
-        )
-      `, [
-        serviceId, now, now, serviceNameId, hostId, service.type,
-        service.status, service.statusHint, service.monitoringState,
-        service.monitoringMode, service.onReboot, now
-      ]);
+      toInsert.push({ id: generateId(), serviceNameId, service });
     }
+  }
+  
+  // Batch update usando unnest
+  if (toUpdate.length > 0) {
+    await client.query(`
+      UPDATE service AS s SET
+        updated_at = u.updated_at,
+        type = u.type::integer,
+        status = u.status::integer,
+        statushint = u.statushint::integer,
+        monitoringstate = u.monitoringstate::integer,
+        monitoringmode = u.monitoringmode::integer,
+        onreboot = u.onreboot::integer,
+        statusmodified = u.statusmodified
+      FROM unnest(
+        $1::bigint[],
+        $2::bigint[],
+        $3::integer[],
+        $4::integer[],
+        $5::integer[],
+        $6::integer[],
+        $7::integer[],
+        $8::integer[],
+        $9::bigint[]
+      ) AS u(id, updated_at, type, status, statushint, monitoringstate, monitoringmode, onreboot, statusmodified)
+      WHERE s.id = u.id
+    `, [
+      toUpdate.map(u => u.id),
+      toUpdate.map(() => now),
+      toUpdate.map(u => u.service.type),
+      toUpdate.map(u => u.service.status),
+      toUpdate.map(u => u.service.statusHint),
+      toUpdate.map(u => u.service.monitoringState),
+      toUpdate.map(u => u.service.monitoringMode),
+      toUpdate.map(u => u.service.onReboot),
+      toUpdate.map(() => now)
+    ]);
+  }
+  
+  // Batch insert
+  if (toInsert.length > 0) {
+    const values = toInsert.map((s, i) => 
+      `($${i*12+1}, $${i*12+2}, $${i*12+3}, $${i*12+4}, $${i*12+5}, $${i*12+6}, $${i*12+7}, $${i*12+8}, $${i*12+9}, $${i*12+10}, $${i*12+11}, $${i*12+12})`
+    ).join(',');
     
-    // Store statistics
-    await storeStatistics(client, serviceId, service, now);
+    const params = toInsert.flatMap(s => [
+      s.id, now, now, s.serviceNameId, hostId, s.service.type,
+      s.service.status, s.service.statusHint, s.service.monitoringState,
+      s.service.monitoringMode, s.service.onReboot, now
+    ]);
+    
+    await client.query(`
+      INSERT INTO service (id, created_at, updated_at, nameid, hostid, type, status, statushint, monitoringstate, monitoringmode, onreboot, statusmodified)
+      VALUES ${values}
+    `, params);
+  }
+  
+  // Batch statistics - use collected_sec from services
+  const servicesWithTime = toInsert.concat(toUpdate).map(item => ({
+    ...item,
+    collectedSec: item.service.collectedSec || now
+  }));
+  await storeStatisticsBatch(client, servicesWithTime);
+  
+  // Calculate and update service statistics in host table
+  await updateHostServiceStats(client, hostId, now);
+}
+
+/**
+ * Update host service statistics (serviceup, servicedown, etc.)
+ */
+async function updateHostServiceStats(client, hostId, now) {
+  // Count services by status
+  const statsResult = await client.query(`
+    SELECT 
+      COUNT(*) FILTER (WHERE status = 0 AND monitoringstate = 1) as serviceup,
+      COUNT(*) FILTER (WHERE status != 0 AND monitoringstate = 1) as servicedown,
+      COUNT(*) FILTER (WHERE monitoringmode = 1 AND monitoringstate = 1) as serviceunmonitorauto,
+      COUNT(*) FILTER (WHERE monitoringmode = 2 AND monitoringstate = 1) as serviceunmonitormanual
+    FROM service
+    WHERE hostid = $1
+  `, [hostId]);
+  
+  const stats = statsResult.rows[0];
+  
+  await client.query(`
+    UPDATE host SET
+      servicemodified = $1,
+      serviceup = $2,
+      servicedown = $3,
+      serviceunmonitorauto = $4,
+      serviceunmonitormanual = $5
+    WHERE id = $6
+  `, [
+    now,
+    parseInt(stats.serviceup) || 0,
+    parseInt(stats.servicedown) || 0,
+    parseInt(stats.serviceunmonitorauto) || 0,
+    parseInt(stats.serviceunmonitormanual) || 0,
+    hostId
+  ]);
+}
+
+// Nova função para batch name IDs
+async function getOrCreateNameIdsBatch(client, names) {
+  const result = await client.query(
+    'SELECT id, name FROM name WHERE name = ANY($1::text[])',
+    [names]
+  );
+  
+  const map = {};
+  const existing = new Set(result.rows.map(r => r.name));
+  const toCreate = names.filter(n => !existing.has(n));
+  
+  // Batch insert novos names
+  if (toCreate.length > 0) {
+    const values = toCreate.map((name, i) => 
+      `($${i*2+1}, $${i*2+2})`
+    ).join(',');
+    
+    const params = toCreate.flatMap(name => {
+      const id = generateId();
+      map[name] = id;
+      return [id, name];
+    });
+    
+    await client.query(`INSERT INTO name (id, name) VALUES ${values}`, params);
+  }
+  
+  // Adicionar existentes ao map
+  result.rows.forEach(r => {
+    map[r.name] = r.id;
+  });
+  
+  return map;
+}
+
+/**
+ * Store statistics in batch for multiple services
+ */
+async function storeStatisticsBatch(client, services) {
+  for (const item of services) {
+    const serviceId = item.id;
+    const service = item.service;
+    const collectedSec = item.collectedSec || Math.floor(Date.now() / 1000);
+    await storeStatistics(client, serviceId, service, collectedSec);
   }
 }
 

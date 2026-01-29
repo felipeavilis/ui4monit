@@ -24,21 +24,26 @@ async function parseMonitXml(xmlString) {
 function extractHostInfo(monitData) {
   const server = monitData.server || {};
   const platform = monitData.platform || {};
+  const credentials = server.credentials || {};
   
   return {
     localhostname: server.localhostname || 'unknown',
-    incarnation: server.incarnation || 0,
-    monitId: server.id || `${server.localhostname}-${Date.now()}`,
+    incarnation: monitData.incarnation || server.incarnation || 0,
+    monitId: monitData.id || server.id || `${server.localhostname}-${Date.now()}`,
     controlfile: server.controlfile || '',
     httpd: {
       address: server.httpd?.address || '0.0.0.0',
       port: server.httpd?.port || 2812,
       ssl: server.httpd?.ssl === 1 || server.httpd?.ssl === 'true'
     },
+    credentials: {
+      username: credentials.username || '',
+      password: credentials.password || ''
+    },
     poll: server.poll || 120,
     startdelay: server.startdelay || 0,
     uptime: server.uptime || 0,
-    version: server.version || '',
+    version: monitData.version || server.version || '',
     platform: {
       name: platform.name || '',
       release: platform.release || '',
@@ -70,6 +75,8 @@ function extractServices(monitData) {
     monitoringState: service.monitor || 0,
     monitoringMode: service.monitormode || 0,
     onReboot: service.onreboot || 0,
+    collectedSec: service.collected_sec || Math.floor(Date.now() / 1000),
+    collectedUsec: service.collected_usec || 0,
     // System service metrics
     system: service.system ? {
       load: service.system.load || {},
