@@ -14,7 +14,10 @@ async function processMonitData(xmlData, sourceIp) {
   
   try {
     await client.query('BEGIN');
-    
+
+    // Debug: Store raw XML
+    await debugStoreXml(client, xmlData);
+
     // Parse XML
     const monitData = await parseMonitXml(xmlData);
     const hostInfo = extractHostInfo(monitData);
@@ -467,5 +470,22 @@ async function storeEvents(client, hostId, events) {
     ]);
   }
 }
+
+/**
+ * Debug function - Store raw XML in tmp_collector table
+ */
+async function debugStoreXml(client, xmlData) {
+  try {
+    const id = generateId();
+    await client.query(
+      'INSERT INTO tmp_collector (id, xml) VALUES ($1, $2)',
+      [id, xmlData]
+    );
+    console.log(`[Debug] XML stored with id: ${id}`);
+  } catch (error) {
+    console.error('[Debug] Failed to store XML:', error.message);
+  }
+}
+/** FIM DEBUG **/
 
 module.exports = { processMonitData };
