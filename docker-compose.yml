@@ -38,19 +38,20 @@ services:
       - /app/node_modules
     command: npm run dev
 
-  frontend:
-    build: ./frontend
-    container_name: ui4monit-frontend
-    environment:
-      REACT_APP_API_URL: http://localhost:3001
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    command: npm start
+  # -- IN DEVELOPMENT --------------------
+  # frontend:
+  #   build: ./frontend
+  #   container_name: ui4monit-frontend
+  #   environment:
+  #     REACT_APP_API_URL: http://localhost:3001
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - backend
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   command: npm start
 
 volumes:
   postgres-data:
