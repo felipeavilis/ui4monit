@@ -203,3 +203,49 @@ CREATE INDEX statistics_double_statisticsid_collectedsec_index ON statistics_dou
 
 
 INSERT INTO ui4monit (schemaversion, welcome, purgeevents, purgeanalytics, skew, programtimeout, auditdefaultpasswords, auditmd5passwords, checkmonitversion, checkui4monitversion) VALUES (26, 1, 11, 10, 3, 300, 1, 1, 0, 0);
+
+
+/* ------------------------------------------------------------ Procedures */
+
+
+/**
+ * Check and mark offline hosts based on timeout
+ * 
+ * A host is considered offline if it hasn't sent data for more than
+ * 2x its poll interval (default timeout multiplier).
+ * 
+ * @param timeout_multiplier - Multiplier for poll interval (default: 2)
+ * @returns Number of hosts marked as offline
+ */
+CREATE OR REPLACE FUNCTION check_offline_hosts(timeout_multiplier INTEGER DEFAULT 2)
+RETURNS INTEGER AS $$
+DECLARE
+  current_time BIGINT;
+  affected_count INTEGER;
+BEGIN
+  -- Get current Unix timestamp
+  current_time := EXTRACT(EPOCH FROM NOW())::BIGINT;
+  
+  -- Update hosts that haven't sent data within timeout period
+  -- Only update hosts that are currently marked as online (status = 1)
+  UPDATE host
+  SET 
+    status = 0,
+    statusheartbeat = 0,
+    statusmodified = current_time
+  WHERE 
+    status = 1
+    AND updated_at IS NOT NULL
+    AND poll > 0
+    AND (current_time - updated_at) > (poll * timeout_multiplier);
+  
+  GET DIAGNOSTICS affected_count = ROW_COUNT;
+  
+  RETURN affected_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+

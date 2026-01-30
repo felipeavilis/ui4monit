@@ -3,7 +3,8 @@ const {
   parseMonitXml,
   extractHostInfo,
   extractServices,
-  extractEvents
+  extractEvents,
+  extractServiceGroups
 } = require('../parsers/monitParser');
 
 /**
@@ -23,12 +24,18 @@ async function processMonitData(xmlData, sourceIp) {
     const hostInfo = extractHostInfo(monitData);
     const services = extractServices(monitData);
     const events = extractEvents(monitData);
+    const serviceGroups = extractServiceGroups(monitData);
     
     // Create or update host
     const hostId = await upsertHost(client, hostInfo, sourceIp);
     
     // Update services
     await updateServices(client, hostId, services);
+    
+    // Store service groups
+    if (serviceGroups.length > 0) {
+      await storeServiceGroups(client, hostId, serviceGroups, services);
+    }
     
     // Store events
     if (events.length > 0) {
@@ -374,16 +381,28 @@ async function storeStatisticsBatch(client, services) {
  * Store service statistics
  */
 async function storeStatistics(client, serviceId, service, collectedSec) {
-  // System statistics (CPU, Memory, Load)
+  // System statistics (CPU, Memory, Load, Swap)
   if (service.system) {
     if (service.system.cpu) {
       await storeMetric(client, serviceId, 'cpu_user', service.system.cpu.user, collectedSec);
       await storeMetric(client, serviceId, 'cpu_system', service.system.cpu.system, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_nice', service.system.cpu.nice, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_wait', service.system.cpu.wait, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_hardirq', service.system.cpu.hardirq, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_softirq', service.system.cpu.softirq, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_steal', service.system.cpu.steal, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_guest', service.system.cpu.guest, collectedSec);
+      await storeMetric(client, serviceId, 'cpu_guestnice', service.system.cpu.guestnice, collectedSec);
     }
     
     if (service.system.memory) {
       await storeMetric(client, serviceId, 'memory_percent', service.system.memory.percent, collectedSec);
       await storeMetric(client, serviceId, 'memory_kilobyte', service.system.memory.kilobyte, collectedSec);
+    }
+    
+    if (service.system.swap) {
+      await storeMetric(client, serviceId, 'swap_percent', service.system.swap.percent, collectedSec);
+      await storeMetric(client, serviceId, 'swap_kilobyte', service.system.swap.kilobyte, collectedSec);
     }
     
     if (service.system.load) {
@@ -403,6 +422,18 @@ async function storeStatistics(client, serviceId, service, collectedSec) {
   if (service.filesystem) {
     await storeMetric(client, serviceId, 'filesystem_percent', service.filesystem.percent, collectedSec);
     await storeMetric(client, serviceId, 'filesystem_usage', service.filesystem.usage, collectedSec);
+  }
+  
+  // Port statistics (type 4)
+  if (service.port) {
+    await storeMetric(client, serviceId, 'port_responsetime', service.port.responsetime, collectedSec);
+  }
+  
+  // File descriptors statistics
+  if (service.filedescriptors) {
+    await storeMetric(client, serviceId, 'filedescriptors_allocated', service.filedescriptors.allocated, collectedSec);
+    await storeMetric(client, serviceId, 'filedescriptors_unused', service.filedescriptors.unused, collectedSec);
+    await storeMetric(client, serviceId, 'filedescriptors_maximum', service.filedescriptors.maximum, collectedSec);
   }
 }
 
@@ -468,6 +499,57 @@ async function storeEvents(client, hostId, events) {
       serviceNameId, event.type, event.id, event.state, event.action,
       event.message, 1
     ]);
+  }
+}
+
+/**
+ * Store service groups
+ */
+async function storeServiceGroups(client, hostId, serviceGroups, services) {
+  // Create a map of service names to service nameIds
+  const serviceNameMap = new Map();
+  for (const service of services) {
+    const serviceNameId = await getOrCreateNameId(client, service.name);
+    serviceNameMap.set(service.name, serviceNameId);
+  }
+  
+  for (const group of serviceGroups) {
+    const groupNameId = await getOrCreateNameId(client, group.name);
+    
+    // Check if service group already exists
+    const existingGroup = await client.query(
+      'SELECT id FROM servicegroup WHERE hostid = $1 AND nameid = $2',
+      [hostId, groupNameId]
+    );
+    
+    let groupId;
+    if (existingGroup.rows.length > 0) {
+      groupId = existingGroup.rows[0].id;
+    } else {
+      groupId = generateId();
+      await client.query(`
+        INSERT INTO servicegroup (id, nameid, hostid)
+        VALUES ($1, $2, $3)
+      `, [groupId, groupNameId, hostId]);
+    }
+    
+    // Remove existing grouped services for this group
+    await client.query(
+      'DELETE FROM groupedservices WHERE servicegroupid = $1',
+      [groupId]
+    );
+    
+    // Add services to group
+    for (const serviceName of group.services) {
+      const serviceNameId = serviceNameMap.get(serviceName);
+      if (serviceNameId) {
+        await client.query(`
+          INSERT INTO groupedservices (servicegroupid, service_nameid)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+        `, [groupId, serviceNameId]);
+      }
+    }
   }
 }
 
