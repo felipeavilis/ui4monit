@@ -477,14 +477,40 @@ async function storeEvents(client, hostId, events) {
     const serviceNameId = await getOrCreateNameId(client, event.service);
     
     // Get serviceid
-    const serviceResult = await client.query(
+    let serviceResult = await client.query(
       'SELECT id FROM service WHERE hostid = $1 AND nameid = $2',
       [hostId, serviceNameId]
     );
     
-    if (serviceResult.rows.length === 0) continue;
+    let serviceId;
     
-    const serviceId = serviceResult.rows[0].id;
+    // If service doesn't exist, create a virtual service for system events (e.g., "Monit")
+    if (serviceResult.rows.length === 0) {
+      serviceId = generateId();
+      const now = Math.floor(Date.now() / 1000);
+      
+      await client.query(`
+        INSERT INTO service (
+          id, created_at, updated_at, nameid, hostid, type, status, statushint,
+          monitoringstate, monitoringmode, onreboot, statusmodified
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        )
+      `, [
+        serviceId, now, now, serviceNameId, hostId,
+        0, // type = 0 (system/virtual service)
+        0, // status = 0 (unknown)
+        0, // statushint = 0
+        0, // monitoringstate = 0 (not monitored)
+        0, // monitoringmode = 0
+        0, // onreboot = 0
+        now
+      ]);
+      
+      console.log(`[Collector] Created virtual service "${event.service}" for system events`);
+    } else {
+      serviceId = serviceResult.rows[0].id;
+    }
     
     await client.query(`
       INSERT INTO event (
