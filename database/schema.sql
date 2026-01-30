@@ -220,11 +220,11 @@ INSERT INTO ui4monit (schemaversion, welcome, purgeevents, purgeanalytics, skew,
 CREATE OR REPLACE FUNCTION check_offline_hosts(timeout_multiplier INTEGER DEFAULT 2)
 RETURNS INTEGER AS $$
 DECLARE
-  current_time BIGINT;
+  v_current_time BIGINT;
   affected_count INTEGER;
 BEGIN
   -- Get current Unix timestamp
-  current_time := EXTRACT(EPOCH FROM NOW())::BIGINT;
+  v_current_time := EXTRACT(EPOCH FROM NOW())::BIGINT;
   
   -- Update hosts that haven't sent data within timeout period
   -- Only update hosts that are currently marked as online (status = 1)
@@ -232,12 +232,12 @@ BEGIN
   SET 
     status = 0,
     statusheartbeat = 0,
-    statusmodified = current_time
+    statusmodified = v_current_time
   WHERE 
     status = 1
     AND updated_at IS NOT NULL
     AND poll > 0
-    AND (current_time - updated_at) > (poll * timeout_multiplier);
+    AND (v_current_time - updated_at) > (poll * timeout_multiplier);
   
   GET DIAGNOSTICS affected_count = ROW_COUNT;
   
